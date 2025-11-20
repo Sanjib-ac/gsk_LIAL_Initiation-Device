@@ -1,8 +1,3 @@
-"""
-LED Controller with Network Status and Data Logging
-Monitors network connectivity and logs data on button press
-"""
-
 import RPi.GPIO as GPIO
 import time
 import configparser
@@ -10,30 +5,29 @@ import socket
 import os
 from datetime import datetime
 from pathlib import Path
+import subprocess
 
 
 class LEDController:
     """Main controller class for LED operations and network monitoring"""
 
     def __init__(self, config_file='config.ini'):
-        """Initialize the LED Controller with configuration"""
         self.config = self._load_config(config_file)
         self._setup_gpio()
         self.network_connected = False
 
-    def _load_config(self, config_file):
-        """Load configuration from INI file"""
-        config = configparser.ConfigParser()
+        # Pre-generate filename and content once per button press
+        self.file_content = ""
+        self.filename = ""
 
-        # Create default config if not exists
+    def _load_config(self, config_file):
+        config = configparser.ConfigParser()
         if not os.path.exists(config_file):
             self._create_default_config(config_file)
-
         config.read(config_file)
         return config
 
     def _create_default_config(self, config_file):
-        """Create a default configuration file"""
         config = configparser.ConfigParser()
 
         config['GPIO_PINS'] = {
@@ -41,18 +35,18 @@ class LEDController:
             'pin_green': '27',
             'pin_blue': '22',
             'button_pin': '18',
-            'status_led': '23',  # LED to glow when button pressed
-            'success_led': '24',  # LED for successful file write
-            'error_led': '25'  # LED for file write errors
+            'status_led': '23',
+            'success_led': '24',
+            'error_led': '25'
         }
 
         config['LED_BEHAVIOR'] = {
-            'network_check_blinks': '5',  # Blink x times if no network
-            'blink_duration': '0.5',  # Duration of each blink in seconds
-            'error_blinks': '3',  # Blink error LED x times on failure
-            'sequence_duration': '10',  # Duration of button press sequence
-            'max_retries': '3',  # Maximum number of retries after initial attempt
-            'retry_delay': '2'  # Delay between retry attempts (seconds)
+            'network_check_blinks': '5',
+            'blink_duration': '0.5',
+            'error_blinks': '3',
+            'sequence_duration': '10',
+            'max_retries': '3',
+            'retry_delay': '2'
         }
 
         config['FILE_SETTINGS'] = {
@@ -62,22 +56,26 @@ class LEDController:
         }
 
         config['NETWORK'] = {
-            'check_interval': '5',  # Check network every 5 seconds
-            'test_host': '8.8.8.8',  # Google DNS for connectivity test
+            'check_interval': '5',
+            'test_host': '8.8.8.8',
             'test_port': '53'
+        }
+
+        config['REMOTE'] = {
+            'remoteUser': 'Sanjib',
+            'IP': '1.1.1.1',
+            'location': 'Documents/gsk_LIAL_Initiation-Device/logFromPi'
         }
 
         with open(config_file, 'w') as f:
             config.write(f)
-
         print(f"Default configuration created: {config_file}")
 
     def _setup_gpio(self):
-        """Setup GPIO pins based on configuration"""
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
 
-        # Get pin numbers from config
+        # GPIO pins
         self.pin_red = self.config.getint('GPIO_PINS', 'pin_red')
         self.pin_green = self.config.getint('GPIO_PINS', 'pin_green')
         self.pin_blue = self.config.getint('GPIO_PINS', 'pin_blue')
@@ -86,212 +84,172 @@ class LEDController:
         self.success_led = self.config.getint('GPIO_PINS', 'success_led')
         self.error_led = self.config.getint('GPIO_PINS', 'error_led')
 
-        # Setup LED pins as output
-        GPIO.setup(self.pin_red, GPIO.OUT)
-        GPIO.setup(self.pin_green, GPIO.OUT)
-        GPIO.setup(self.pin_blue, GPIO.OUT)
-        GPIO.setup(self.status_led, GPIO.OUT)
-        GPIO.setup(self.success_led, GPIO.OUT)
-        GPIO.setup(self.error_led, GPIO.OUT)
+        # Output pins
+        for pin in [self.pin_red, self.pin_green, self.pin_blue,
+                    self.status_led, self.success_led, self.error_led]:
+            GPIO.setup(pin, GPIO.OUT)
+            GPIO.output(pin, GPIO.LOW)
 
-        # Setup button pin as input with pull-up
+        # Button input
         GPIO.setup(self.button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-        # Initialize all LEDs to OFF
-        self.set_rgb_color(False, False, False)
-        GPIO.output(self.status_led, GPIO.LOW)
-        GPIO.output(self.success_led, GPIO.LOW)
-        GPIO.output(self.error_led, GPIO.LOW)
-
     def set_rgb_color(self, r, g, b):
-        """Set RGB LED color"""
         GPIO.output(self.pin_red, GPIO.HIGH if r else GPIO.LOW)
         GPIO.output(self.pin_green, GPIO.HIGH if g else GPIO.LOW)
         GPIO.output(self.pin_blue, GPIO.HIGH if b else GPIO.LOW)
 
     def check_network_connectivity(self):
-        """Check if network (WiFi/Ethernet) is connected"""
         try:
             host = self.config.get('NETWORK', 'test_host')
             port = self.config.getint('NETWORK', 'test_port')
-
-            # Create socket and try to connect
-            socket.setdefaulttimeout(3)
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.connect((host, port))
+            sock = socket.create_connection((host, port), timeout=3)
             sock.close()
             return True
         except (socket.error, socket.timeout):
             return False
 
     def indicate_network_status(self):
-        """Show network status using green LED"""
         was_connected = self.network_connected
         self.network_connected = self.check_network_connectivity()
-
-        # Update LED based on network status
         if self.network_connected:
-            # Continuous green for connected
             self.set_rgb_color(False, True, False)
-            if self.network_connected != was_connected or was_connected is False:
+            if not was_connected:
                 print("Network connected - Ready!")
         else:
-            # Red for disconnected
             self.set_rgb_color(True, False, False)
-            if self.network_connected != was_connected or was_connected is False:
+            if was_connected or not was_connected:
                 print("Network disconnected")
 
-    def write_data_file(self):
-        """Write data file with current timestamp and ADS data"""
+    def _prepare_file(self):
+        """Generate filename and content once"""
+        save_dir = self.config.get('FILE_SETTINGS', 'save_directory')
+        Path(save_dir).mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_prefix = self.config.get('FILE_SETTINGS', 'file_prefix')
+        file_extension = self.config.get('FILE_SETTINGS', 'file_extension')
+        self.filename = f"{file_prefix}_{timestamp}{file_extension}"
+        self.local_filepath = os.path.join(save_dir, self.filename)
+
+        self.file_content = (
+            f"TEST Data Log\n"
+            f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Network Status: {'Connected' if self.network_connected else 'Disconnected'}\n"
+            f"\n--- TEST Data ---\n"
+            f"Sample data\n"
+        )
+
+    def write_file(self, write2NetworkDrive=False):
+        """Write file locally and optionally to network"""
         try:
-            # Get file settings from config
-            save_dir = self.config.get('FILE_SETTINGS', 'save_directory')
-            file_prefix = self.config.get('FILE_SETTINGS', 'file_prefix')
-            file_extension = self.config.get('FILE_SETTINGS', 'file_extension')
+            # Write local file
+            with open(self.local_filepath, 'w') as f:
+                f.write(self.file_content)
 
-            # Create directory if it doesn't exist
-            Path(save_dir).mkdir(parents=True, exist_ok=True)
+            if write2NetworkDrive:
+                # Read remote info
+                remote_user = self.config.get('REMOTE', 'remoteUser', fallback='Sanjib')
+                remote_ip = self.config.get('REMOTE', 'IP', fallback='192.168.1.116')
+                remote_location = self.config.get('REMOTE', 'location',
+                                                  fallback='Documents/gsk_LIAL_Initiation-Device/logFromPi')
 
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{file_prefix}_{timestamp}{file_extension}"
-            filepath = os.path.join(save_dir, filename)
+                scp_command = [
+                    "scp",
+                    self.local_filepath,
+                    f"{remote_user}@{remote_ip}:{remote_location}/{self.filename}"
+                ]
 
-            # Write data to file
-            with open(filepath, 'w') as f:
-                f.write(f"ADS Data Log\n")
-                f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Network Status: {'Connected' if self.network_connected else 'Disconnected'}\n")
-                f.write(f"\n--- TEST Data ---\n")
-                f.write(f"Sample data\n")
-
-            print(f"Data file created successfully: {filepath}")
+                try:
+                    subprocess.run(scp_command, check=True, timeout=4)
+                    GPIO.output(self.success_led, GPIO.HIGH)
+                    time.sleep(2)
+                    GPIO.output(self.success_led, GPIO.LOW)
+                    print(f"File copied to network: {remote_ip}:{remote_location}/{self.filename}")
+                except subprocess.TimeoutExpired:
+                    print("SCP command timed out")
+                    self._blink_error_led()
+                    return False
+                except subprocess.CalledProcessError:
+                    print("Unable to write to network drive")
+                    self._blink_error_led()
+                    return False
             return True
 
         except Exception as e:
-            print(f"Error writing data file: {e}")
+            print(f"Error writing file: {e}")
+            self._blink_error_led()
             return False
 
-    def handle_button_press(self):
-        """Handle button press event with retry logic"""
+    def _blink_error_led(self, times=None):
+        """Blink error LED in case of failure"""
+        blink_duration = self.config.getfloat('LED_BEHAVIOR', 'blink_duration', fallback=0.5)
+        if times is None:
+            times = self.config.getint('LED_BEHAVIOR', 'error_blinks', fallback=3)
+        for _ in range(times):
+            GPIO.output(self.error_led, GPIO.HIGH)
+            time.sleep(blink_duration)
+            GPIO.output(self.error_led, GPIO.LOW)
+            time.sleep(blink_duration)
+
+    def handle_button_press(self, write2NetworkDrive=False):
+        """Handle button press and write file"""
         print("Button pressed! Processing...")
+        self._prepare_file()
 
-        max_retries = self.config.getint('LED_BEHAVIOR', 'max_retries')
-        retry_delay = self.config.getint('LED_BEHAVIOR', 'retry_delay')
-        blink_duration = self.config.getfloat('LED_BEHAVIOR', 'blink_duration')
+        max_retries = self.config.getint('LED_BEHAVIOR', 'max_retries', fallback=3)
+        retry_delay = self.config.getint('LED_BEHAVIOR', 'retry_delay', fallback=2)
 
-        # Turn on status LED
         GPIO.output(self.status_led, GPIO.HIGH)
         time.sleep(0.5)
 
-        # Initial attempt (attempt 0)
-        print("Initial attempt to write data file...")
-        success = self.write_data_file()
-
-        if success:
-            print("File written successfully on first attempt!")
-            # Turn off status LED
-            GPIO.output(self.status_led, GPIO.LOW)
-
-            # Glow success LED continuously
-            GPIO.output(self.success_led, GPIO.HIGH)
-            time.sleep(2)  # Keep it on for 2 seconds
-            GPIO.output(self.success_led, GPIO.LOW)
-            return True
-
-        # If initial attempt failed, retry X times
-        for retry in range(1, max_retries + 1):
-            print(f"Initial attempt failed. Retry {retry} of {max_retries}...")
-
-            # Blink error LED 'retry' number of times to show which retry
-            for _ in range(retry):
-                GPIO.output(self.error_led, GPIO.HIGH)
-                time.sleep(blink_duration)
-                GPIO.output(self.error_led, GPIO.LOW)
-                time.sleep(blink_duration)
-
-            # Wait before retrying
-            print(f"Waiting {retry_delay} seconds before retry...")
+        for attempt in range(max_retries + 1):
+            success = self.write_file(write2NetworkDrive=write2NetworkDrive)
+            if success:
+                GPIO.output(self.status_led, GPIO.LOW)
+                return True
+            print(f"Attempt {attempt + 1} failed, retrying in {retry_delay}s...")
+            self._blink_error_led(times=attempt + 1)
             time.sleep(retry_delay)
 
-            # Try to write data file
-            success = self.write_data_file()
-
-            if success:
-                print(f"File written successfully on retry {retry}!")
-                # Turn off status LED
-                GPIO.output(self.status_led, GPIO.LOW)
-
-                # Glow success LED continuously
-                GPIO.output(self.success_led, GPIO.HIGH)
-                time.sleep(2)  # Keep it on for 2 seconds
-                GPIO.output(self.success_led, GPIO.LOW)
-                return True
-
-        # Turn off status LED
         GPIO.output(self.status_led, GPIO.LOW)
-
-        # If all retries failed, show continuous red LED
-        print(f"Initial attempt + {max_retries} retries all failed. File write unsuccessful.")
-        self.set_rgb_color(True, False, False)  # Continuous RED
-        GPIO.output(self.error_led, GPIO.HIGH)  # Keep error LED on
-
+        print("All attempts failed")
+        self.set_rgb_color(True, False, False)  # RED
         return False
 
-    def file_write_mode(self):
-        """File write mode - waits for button press and writes file"""
+    def file_write_mode(self, write2NetworkDrive=False):
+        """Wait for button press and write file"""
         print("File Write Mode: Waiting for button press...")
-
         button_pressed_last = False
-        file_written = False
-
-        while not file_written:
-            # Check button state
+        while True:
             button_state = GPIO.input(self.button_pin)
-
-            # Detect button press (with simple debouncing)
             if button_state == GPIO.LOW and not button_pressed_last:
-                file_written = self.handle_button_press()
+                time.sleep(0.01)
+                success = self.handle_button_press(write2NetworkDrive=write2NetworkDrive)
                 button_pressed_last = True
-
-                # Exit the loop after handling button press
-                # (either success or all retries failed)
-                break
+                return success
             elif button_state == GPIO.HIGH:
                 button_pressed_last = False
-
             time.sleep(0.1)
 
-        if file_written:
-            print("File write completed successfully.")
-        else:
-            print("File write failed after all retries. Check the error LED.")
-            # Keep the program running for a few seconds to show the error state
-            time.sleep(5)
-
-        return file_written
-
-    def run(self):
-        """Main run loop - clean entry point"""
+    def run(self, write2NetworkDrive=False):
         print("LED Controller Started")
-
         try:
             self.indicate_network_status()
-            self.file_write_mode()
-
+            self.file_write_mode(write2NetworkDrive=write2NetworkDrive)
             print("Program completed. Exiting...")
-
         except KeyboardInterrupt:
             print("\nScript interrupted by user.")
         finally:
             self.cleanup()
 
     def cleanup(self):
-        """Clean up GPIO pins"""
         GPIO.cleanup()
         print("GPIO cleaned up. Exiting.")
 
 
 if __name__ == "__main__":
+    # Create controller with config file
     controller = LEDController('initiation_config.ini')
-    controller.run()
+
+    # Run controller, set write2NetworkDrive=True to copy files to network
+    controller.run(write2NetworkDrive=True)

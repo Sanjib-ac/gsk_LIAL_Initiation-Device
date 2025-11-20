@@ -63,7 +63,7 @@ class LEDController:
 
         config['REMOTE'] = {
             'remoteUser': 'Sanjib',
-            'IP': '1.1.1.1',
+            'IP': '192.168.1.116',
             'location': 'Documents/gsk_LIAL_Initiation-Device/logFromPi'
         }
 
@@ -144,6 +144,7 @@ class LEDController:
         try:
             # Write local file
             with open(self.local_filepath, 'w') as f:
+                print(f"File path: {self.local_filepath}")
                 f.write(self.file_content)
 
             if write2NetworkDrive:
@@ -249,7 +250,7 @@ class LEDController:
 
 if __name__ == "__main__":
     # Create controller with config file
-    controller = LEDController('initiation_config.ini')
+    controller = LEDController('/usr/local/projects/initiation_config.ini')
 
     # Run controller, set write2NetworkDrive=True to copy files to network
     controller.run(write2NetworkDrive=True)
